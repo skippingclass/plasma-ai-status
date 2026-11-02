@@ -691,11 +691,12 @@ def tail_events(path, size=131072):
         return
 
 
-def codex_session_status(events, now):
+def codex_session_status(events, now, owner_started_at=None):
     status = "отдыхает"
     finished = False
     pending_tools = set()
     latest_ts = 0
+    latest_activity_ts = 0
     for event in events:
         payload = event.get("payload", {})
         try:
@@ -703,6 +704,14 @@ def codex_session_status(events, now):
         except (KeyError, ValueError):
             continue
         kind = payload.get("type")
+        if ((event.get("type") == "event_msg" and kind in (
+                "task_complete", "task_completed", "turn_aborted", "turn_complete",
+                "task_started", "turn_started", "error", "agent_reasoning",
+                "agent_message", "token_count", "item_completed")) or
+                (event.get("type") == "response_item" and kind in (
+                    "function_call", "custom_tool_call", "function_call_output",
+                    "custom_tool_call_output", "reasoning", "message"))):
+            latest_activity_ts = latest_ts
         if event.get("type") == "event_msg":
             if kind in ("task_complete", "task_completed", "turn_aborted", "turn_complete"):
                 status = "отдыхает"
@@ -735,7 +744,8 @@ def codex_session_status(events, now):
                 if finished:
                     pending_tools.clear()
     # Unfinished rollouts can survive a crash. Do not show them as busy forever.
-    if now - latest_ts > 180:
+    live = owner_started_at is not None and latest_activity_ts >= owner_started_at
+    if now - latest_ts > 180 and not live:
         return "отдыхает"
     return "работает" if pending_tools else status
 
@@ -758,7 +768,8 @@ def is_quota_worker_child(pid, proc_root="/proc"):
     return False
 
 
-def codex_running(proc_root="/proc"):
+def codex_pids(proc_root="/proc"):
+    pids = []
     for path in glob.glob(f"{proc_root}/[0-9]*/cmdline"):
         try:
             if os.stat(path).st_uid != os.getuid():
@@ -771,16 +782,52 @@ def codex_running(proc_root="/proc"):
                     arg in ("login", "logout", "--help", "-h", "--version", "-V") for arg in args[1:]):
                 continue
             if not is_quota_worker_child(pid, proc_root):
-                return True
+                pids.append(pid)
         except (OSError, ValueError):
             continue
-    return False
+    return pids
+
+
+def codex_running(proc_root="/proc"):
+    return bool(codex_pids(proc_root))
+
+
+def codex_owned_sessions(proc_root="/proc"):
+    """Map writable rollouts to the lifetime of their current Codex owner."""
+    sessions = {}
+    root = os.path.realpath(os.path.join(codex_home(), "sessions")) + os.sep
+    try:
+        with open(f"{proc_root}/stat") as stream:
+            boot = next(float(line.split()[1]) for line in stream if line.startswith("btime "))
+        ticks = os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, StopIteration):
+        return sessions
+    for pid in codex_pids(proc_root):
+        try:
+            with open(f"{proc_root}/{pid}/stat") as stream:
+                started = boot + int(stream.read().rsplit(")", 1)[1].split()[19]) / ticks
+        except (OSError, ValueError, IndexError):
+            continue
+        for fd in glob.glob(f"{proc_root}/{pid}/fd/*"):
+            try:
+                target = os.path.realpath(fd)
+                if not target.startswith(root) or not target.endswith(".jsonl"):
+                    continue
+                with open(fd.replace("/fd/", "/fdinfo/")) as stream:
+                    flags = next(int(line.split()[1], 8) for line in stream if line.startswith("flags:"))
+                if flags & os.O_ACCMODE not in (os.O_WRONLY, os.O_RDWR):
+                    continue
+                sessions[target] = min(started, sessions.get(target, started))
+            except (OSError, ValueError, StopIteration):
+                continue
+    return sessions
 
 
 def check_codex_status():
     now = time.time()
     best = "спит"
     running = codex_running()
+    owned = codex_owned_sessions()
     files = glob.glob(os.path.join(codex_home(), "sessions", "*", "*", "*", "*.jsonl"))
     recent = []
     for path in files:
@@ -790,8 +837,9 @@ def check_codex_status():
                 recent.append((modified, path))
         except OSError:
             continue
-    for _, path in sorted(recent, reverse=True)[:12]:
-        status = codex_session_status(tail_events(path), now)
+    candidates = {os.path.realpath(path) for _, path in sorted(recent, reverse=True)[:12]} | set(owned)
+    for path in candidates:
+        status = codex_session_status(tail_events(path), now, owned.get(os.path.realpath(path)))
         if STATUS_PRIORITY[status] > STATUS_PRIORITY[best]:
             best = status
     return "отдыхает" if running and best == "спит" else best
@@ -850,7 +898,7 @@ def write_cache(path, data):
             os.unlink(temporary)
 
 
-def refresh_quota(provider):
+def refresh_quota(provider, force=False):
     cache_file, lock_file = cache_paths(provider)
     with open(lock_file, "a") as lock:
         try:
@@ -859,13 +907,15 @@ def refresh_quota(provider):
             return
         cached = load_quota(provider)
         now = time.time()
-        if 0 <= now - cached.get("attempted_at", 0) < CACHE_TTL:
+        if 0 <= now - cached.get("attempted_at", 0) < (5 if force else CACHE_TTL):
             # Commit migrated snapshots while holding the provider lock.
             if not os.path.exists(cache_file):
                 write_cache(cache_file, cached)
             return
         # Persist the attempt before networking to avoid retry storms after failures.
         cached["attempted_at"] = now
+        # A bounded lease also lets other widgets show progress after a worker crash.
+        cached["refreshing_until"] = now + 60
         write_cache(cache_file, cached)
         try:
             quota = fetch_codex_quota() if provider == "codex" else fetch_antigravity_quota()
@@ -885,10 +935,11 @@ def refresh_quota(provider):
                         del merged[key]
                 merged.update({key: value for key, value in quota.items() if key.startswith(prefix)})
                 merged[f"bar{index}_updated_at"] = updated_at
-            merged.update(timestamp=updated_at, attempted_at=now, quota_error="")
+            merged.update(timestamp=updated_at, attempted_at=now, quota_error="", refreshing_until=0)
             write_cache(cache_file, merged)
         except Exception as error:
             cached["quota_error"] = str(error)
+            cached["refreshing_until"] = 0
             write_cache(cache_file, cached)
 
 
@@ -902,6 +953,7 @@ def get_usage(provider):
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     quota = unknown_quota()
     quota.update(cached)
+    quota["quota_refreshing"] = now < cached.get("refreshing_until", 0)
     quota["quota_stale"] = any(
         quota.get(f"bar{index}_percent", -1) >= 0
         and now - quota.get(f"bar{index}_updated_at", quota.get("timestamp", 0)) > CACHE_TTL * 3
@@ -917,9 +969,13 @@ def main():
     parser.add_argument("custom_script", nargs="?", default="")
     parser.add_argument("--provider", choices=("antigravity", "codex"), default="antigravity")
     parser.add_argument("--refresh-only", action="store_true")
+    parser.add_argument("--force-refresh", action="store_true",
+                        help="Bypass the quota TTL (requires --refresh-only; 5s cooldown)")
     args = parser.parse_args()
+    if args.force_refresh and not args.refresh_only:
+        parser.error("--force-refresh requires --refresh-only")
     if args.refresh_only:
-        refresh_quota(args.provider)
+        refresh_quota(args.provider, force=args.force_refresh)
         return
     custom = check_custom_script(args.custom_script)
     if custom:

@@ -20,6 +20,9 @@ ColumnLayout {
     property string colorScheme: "green"
     property int fontSize: 11
     property int barHeight: 12
+    property bool dimmed: false
+    property string quotaState: "hidden"
+    property string quotaDescription: ""
 
     spacing: Math.max(2, Math.round(root.fontSize * 0.25))
 
@@ -53,7 +56,7 @@ ColumnLayout {
         Text {
             id: valueText
             anchors.left: labelText.right
-            anchors.leftMargin: 8
+            anchors.leftMargin: indicator.visible ? 18 : 8
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             horizontalAlignment: Text.AlignRight
@@ -70,14 +73,26 @@ ColumnLayout {
             font.pixelSize: root.fontSize
             font.weight: root.theme.isRounded ? Font.DemiBold : Font.Normal
             font.letterSpacing: root.theme.isRounded ? 0.2 : 0
-            color: root.activeColor
+            color: root.dimmed ? root.theme.textMuted : root.activeColor
             renderType: root.theme.isPixelFont ? Text.NativeRendering : Text.QtRendering
             antialiasing: !root.theme.isPixelFont
+        }
+
+        QuotaIndicator {
+            id: indicator
+            anchors.left: labelText.right
+            anchors.leftMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            theme: root.theme
+            quotaState: root.quotaState
+            description: root.quotaDescription
         }
     }
 
     // Bar Container
     Rectangle {
+        objectName: "quotaFill"
+        opacity: root.dimmed ? 0.45 : 1
         Layout.fillWidth: true
         implicitHeight: root.barHeight
         color: root.theme.slotBg

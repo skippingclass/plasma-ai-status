@@ -28,6 +28,10 @@ Rectangle {
     property bool showResetTimes: false
     property string barStyle: "auto"
     property string mascotSize: "auto"
+    property string quotaState: "hidden"
+    property string quotaDescription: ""
+    property bool bar1Dim: false
+    property bool bar2Dim: false
 
     implicitWidth: 256
     implicitHeight: 288
@@ -227,6 +231,9 @@ Rectangle {
                         colorScheme: root.colorScheme
                         fontSize: root.barFontSize
                         barHeight: root.barHeight
+                        dimmed: root.bar1Dim
+                        quotaState: root.quotaState
+                        quotaDescription: root.quotaDescription
                     }
 
                     PixelProgressBar {
@@ -234,6 +241,7 @@ Rectangle {
                         theme: root.theme
                         Layout.fillWidth: true
                         isSecondBar: true
+                        dimmed: root.bar2Dim
                         label: root.bar2Label
                         percent: root.bar2Percent
                         exactPercent: root.bar2Exact

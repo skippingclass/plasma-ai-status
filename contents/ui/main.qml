@@ -51,12 +51,21 @@ PlasmoidItem {
         const describe = (label, value, reset) => label + ": " + (value < 0 ? "нет данных" : value.toFixed(1) + "% осталось") + (reset ? " (сброс: " + reset + ")" : "");
         const lines = [describe(root.currentBar1Label, root.currentBar1Exact, root.currentBar1Reset),
                        describe(root.currentBar2Label, root.currentBar2Exact, root.currentBar2Reset)];
-        if (monitor.quotaError) lines.push(monitor.quotaError);
-        if (monitor.quotaStale) lines.push("Данные устарели; ожидается обновление");
+        if (monitor.freshness.description) lines.push(monitor.freshness.description);
+        else if (monitor.quotaError) lines.push(monitor.quotaError);
         return lines.join("\n");
     }
 
     preferredRepresentation: isPlanar ? fullRepresentation : compactRepresentation
+
+    Plasmoid.contextualActions: [
+        PlasmaCore.Action {
+            text: i18n("Обновить лимиты")
+            icon.name: "view-refresh"
+            enabled: monitor.canRefresh
+            onTriggered: monitor.refreshQuotas()
+        }
+    ]
 
     compactRepresentation: CompactRepresentation {
         onToggleRequested: root.expanded = !root.expanded
@@ -65,6 +74,8 @@ PlasmoidItem {
         statusText: root.currentStatus
         bar1Val: root.currentBar1Val
         colorScheme: root.currentColorScheme
+        quotaState: monitor.freshness.state
+        quotaDescription: monitor.freshness.description
     }
 
     fullRepresentation: FullRepresentation {
@@ -88,5 +99,9 @@ PlasmoidItem {
         showResetTimes: Plasmoid.configuration.showResetTimes !== undefined ? Plasmoid.configuration.showResetTimes : false
         barStyle: Plasmoid.configuration.barStyle ? Plasmoid.configuration.barStyle : "auto"
         mascotSize: Plasmoid.configuration.mascotSize ? Plasmoid.configuration.mascotSize : "auto"
+        quotaState: monitor.freshness.state
+        quotaDescription: monitor.freshness.description
+        bar1Dim: monitor.freshness.bar1Dim
+        bar2Dim: monitor.freshness.bar2Dim
     }
 }

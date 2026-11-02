@@ -15,6 +15,8 @@ Item {
     property string statusText: "отдыхает"
     property int bar1Val: 99
     property string colorScheme: "green"
+    property string quotaState: "hidden"
+    property string quotaDescription: ""
 
     implicitWidth: Kirigami.Units.iconSizes.medium
     implicitHeight: Kirigami.Units.iconSizes.medium
@@ -38,6 +40,13 @@ Item {
         }
 
         // Mini status dot in the bottom right corner
+        QuotaIndicator {
+            anchors.top: parent.top
+            anchors.right: parent.right
+            theme: root.theme
+            quotaState: root.quotaState
+            description: root.quotaDescription
+        }
         Rectangle {
             anchors.bottom: parent.bottom
             anchors.right: parent.right

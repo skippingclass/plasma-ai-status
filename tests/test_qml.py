@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 
 try:
-    from PySide6.QtCore import QUrl, QObject, QRectF
+    from PySide6.QtCore import QUrl, QObject, QRectF, QMetaObject
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtQml import QQmlApplicationEngine
     from PySide6.QtQuick import QQuickWindow, QQuickItem
@@ -17,6 +17,127 @@ except ImportError:
 
 @unittest.skipUnless(HAS_QT, 'PySide6 is required for the optional QML smoke test')
 class WidgetTests(unittest.TestCase):
+    def test_manual_refresh_coalesces_and_ignores_results_after_provider_switch(self):
+        import json
+        app = QGuiApplication.instance() or QGuiApplication([])
+        engine = QQmlApplicationEngine()
+        ui = (Path(__file__).resolve().parents[1] / 'contents/ui').as_uri()
+        engine.loadData(('''import QtQuick
+import "UI_PATH"
+Item {
+    property string result: ""
+    property var commands: []
+    QtObject {
+        id: config
+        property bool enableCliMonitoring: false
+        property int pollInterval: 60
+        property string customScriptPath: ""
+        property string provider: "antigravity"
+        property string statusText: "отдыхает"
+        property int bar1Percent: -1
+        property int bar2Percent: -1
+        property string bar1Label: "5 часов"
+        property string bar2Label: "неделя"
+        property string lastKnownQuotas: JSON.stringify({codex: {bar1_percent: 22, timestamp: 900}})
+    }
+    AntigravityMonitor {
+        id: monitor
+        configuration: config
+        executeCommand: (source, command) => commands.push(command)
+    }
+    function runScenario() {
+        const disabled = !monitor.canRefresh;
+        config.enableCliMonitoring = true;
+        const oldPoll = monitor.activeCommand;
+        monitor.refreshQuotas();
+        const oldRefresh = monitor.refreshCommand;
+        const count = commands.length;
+        monitor.refreshQuotas();
+        const coalesced = commands.length === count && oldRefresh.indexOf("--force-refresh") >= 0;
+        config.provider = "codex";
+        monitor.handleRefreshData(oldRefresh, {"exit code": 1});
+        const ignoredRefresh = monitor.bar1Val === 22 && monitor.quotaError === "";
+        monitor.handlePollData(oldPoll, {"exit code": 0, stdout: JSON.stringify({bar1_percent: 99})});
+        const ignoredPoll = monitor.bar1Val === 22 && monitor.activeProvider === "codex";
+        monitor.refreshQuotas();
+        const currentRefresh = monitor.refreshCommand;
+        const pendingPoll = monitor.activeCommand;
+        monitor.handleRefreshData(currentRefresh, {"exit code": 0});
+        monitor.handlePollData(pendingPoll, {"exit code": 0, stdout: JSON.stringify({bar1_percent: 88})});
+        monitor.handlePollData(monitor.activeCommand, {"exit code": 0, stdout: JSON.stringify({
+            bar1_percent: 33, bar2_percent: 44, timestamp: Date.now()/1000})});
+        const updated = monitor.bar1Val === 33 && monitor.freshness.state === "fresh";
+        const cooldown = !monitor.canRefresh;
+        monitor.lastManualAt = 0;
+        config.customScriptPath = "/custom/script";
+        const customDisabled = !monitor.canRefresh;
+        result = JSON.stringify({disabled, coalesced, ignoredRefresh, ignoredPoll, updated, cooldown, customDisabled});
+    }
+}'''.replace('UI_PATH', ui)).encode(), QUrl('file:///tmp/widget-refresh-smoke.qml'))
+        self.assertTrue(engine.rootObjects())
+        root = engine.rootObjects()[0]
+        self.assertTrue(QMetaObject.invokeMethod(root, 'runScenario'))
+        result = json.loads(root.property('result'))
+        self.assertTrue(all(result.values()), result)
+        engine.deleteLater()
+        app.processEvents()
+
+    def test_freshness_ages_independently_and_dims_saved_quotas(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        engine = QQmlApplicationEngine()
+        ui = (Path(__file__).resolve().parents[1] / 'contents/ui').as_uri()
+        engine.loadData(('''import QtQuick
+import QtQuick.Window
+import "UI_PATH"
+Window {
+    visible: true; width: 300; height: 320
+    PixelTheme { id: testTheme; objectName: "testTheme" }
+    QuotaFreshness { id: freshness; objectName: "freshness";
+        now: 1000; bar1Updated: 950; bar2Updated: 950; bar1Percent: 40; bar2Percent: 20 }
+    PixelWindow { objectName: "card"; width: 256; height: 288;
+        theme: testTheme; quotaState: freshness.state; quotaDescription: freshness.description;
+        bar1Percent: 40; bar2Percent: 20;
+        bar1Dim: freshness.bar1Dim; bar2Dim: freshness.bar2Dim }
+}'''.replace('UI_PATH', ui)).encode(), QUrl('file:///tmp/widget-freshness-smoke.qml'))
+        self.assertTrue(engine.rootObjects())
+        window = engine.rootObjects()[0]
+        freshness = window.findChild(QObject, 'freshness')
+        card = window.findChild(QQuickItem, 'card')
+        self.assertEqual(freshness.property('state'), 'fresh')
+        freshness.setProperty('bar2Updated', 700)
+        self.assertEqual(freshness.property('state'), 'stale')
+        self.assertFalse(freshness.property('bar1Dim'))
+        self.assertTrue(freshness.property('bar2Dim'))
+        self.assertIn('5 мин назад', freshness.property('description'))
+        freshness.setProperty('now', 1200)
+        self.assertTrue(freshness.property('bar1Dim'))
+        freshness.setProperty('error', 'offline')
+        self.assertEqual(freshness.property('state'), 'error')
+        freshness.setProperty('refreshing', True)
+        self.assertEqual(freshness.property('state'), 'refreshing')
+        for theme in ('retro_pixel', 'material3', 'win95', 'cyberpunk', 'gruvbox', 'catppuccin', 'tokyo_night'):
+            window.findChild(QObject, 'testTheme').setProperty('activeThemeId', theme)
+            for width, height in ((256, 288), (160, 160)):
+                card.setWidth(width)
+                card.setHeight(height)
+                QTest.qWait(10)
+                indicator = card.findChild(QQuickItem, 'quotaIndicator')
+                rect = indicator.mapRectToItem(card, QRectF(0, 0, indicator.width(), indicator.height()))
+                self.assertGreaterEqual(rect.left(), 0)
+                self.assertLessEqual(rect.right(), width)
+                self.assertLessEqual(rect.bottom(), height)
+                bar = card.findChild(QQuickItem, 'quotaBar2')
+                self.assertAlmostEqual(bar.findChild(QQuickItem, 'quotaFill').opacity(), .45)
+        self.assertEqual(card.property('bar1Percent'), 40)
+        freshness.setProperty('custom', True)
+        freshness.setProperty('bar1Updated', 0)
+        freshness.setProperty('bar2Updated', 0)
+        self.assertEqual(freshness.property('state'), 'hidden')
+        self.assertFalse(freshness.property('bar1Dim'))
+        window.close()
+        engine.deleteLater()
+        app.processEvents()
+
     def test_two_providers_render_and_themes_are_independent(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         engine = QQmlApplicationEngine()
