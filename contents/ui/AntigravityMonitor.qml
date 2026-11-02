@@ -43,6 +43,13 @@ Item {
         custom: root.customScript.length > 0
         refreshing: root.backgroundRefreshing || (root.refreshCommand.length > 0 && root.refreshProvider === root.provider)
         error: root.quotaError
+        lowWarning: root.configuration.lowQuotaWarning !== false
+        lowThreshold: root.configuration.lowQuotaThreshold !== undefined ? root.configuration.lowQuotaThreshold : 20
+        criticalThreshold: root.configuration.criticalQuotaThreshold !== undefined ? root.configuration.criticalQuotaThreshold : 10
+        showFull: root.configuration.fullQuotaIndicator !== false
+        dimStale: root.configuration.dimStaleQuotas !== false
+        bar1Exact: root.bar1Exact
+        bar2Exact: root.bar2Exact
         bar1Percent: root.bar1Val
         bar2Percent: root.bar2Val
         bar1Label: root.bar1Label

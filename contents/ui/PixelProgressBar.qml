@@ -21,8 +21,6 @@ ColumnLayout {
     property int fontSize: 11
     property int barHeight: 12
     property bool dimmed: false
-    property string quotaState: "hidden"
-    property string quotaDescription: ""
 
     spacing: Math.max(2, Math.round(root.fontSize * 0.25))
 
@@ -56,7 +54,7 @@ ColumnLayout {
         Text {
             id: valueText
             anchors.left: labelText.right
-            anchors.leftMargin: indicator.visible ? 18 : 8
+            anchors.leftMargin: 8
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             horizontalAlignment: Text.AlignRight
@@ -78,15 +76,6 @@ ColumnLayout {
             antialiasing: !root.theme.isPixelFont
         }
 
-        QuotaIndicator {
-            id: indicator
-            anchors.left: labelText.right
-            anchors.leftMargin: 6
-            anchors.verticalCenter: parent.verticalCenter
-            theme: root.theme
-            quotaState: root.quotaState
-            description: root.quotaDescription
-        }
     }
 
     // Bar Container

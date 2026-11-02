@@ -8,6 +8,31 @@
         <entry name="provider" type="String">
             <default>antigravity</default>
         </entry>
+        <entry name="titleMode" type="String">
+            <default>legacy</default>
+        </entry>
+        <entry name="quotaIndicatorPosition" type="String">
+            <default>header</default>
+        </entry>
+        <entry name="lowQuotaWarning" type="Bool">
+            <default>true</default>
+        </entry>
+        <entry name="lowQuotaThreshold" type="Int">
+            <default>20</default>
+            <min>0</min>
+            <max>100</max>
+        </entry>
+        <entry name="fullQuotaIndicator" type="Bool">
+            <default>true</default>
+        </entry>
+        <entry name="criticalQuotaThreshold" type="Int">
+            <default>10</default>
+            <min>0</min>
+            <max>100</max>
+        </entry>
+        <entry name="dimStaleQuotas" type="Bool">
+            <default>true</default>
+        </entry>
         <entry name="titleText" type="String">
             <default>antigravity.sh</default>
         </entry>

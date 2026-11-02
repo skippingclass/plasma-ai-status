@@ -29,6 +29,7 @@ Item {
     property real bar2Exact: 0.0
     property string bar1Reset: ""
     property string bar2Reset: ""
+    property string quotaIndicatorPosition: "header"
     property string quotaState: "hidden"
     property string quotaDescription: ""
     property bool bar1Dim: false
@@ -65,6 +66,7 @@ Item {
         showResetTimes: root.showResetTimes
         barStyle: root.barStyle
         mascotSize: root.mascotSize
+        quotaIndicatorPosition: root.quotaIndicatorPosition
         quotaState: root.quotaState
         quotaDescription: root.quotaDescription
         bar1Dim: root.bar1Dim

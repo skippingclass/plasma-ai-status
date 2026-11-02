@@ -7,7 +7,7 @@ import unittest
 try:
     from PySide6.QtCore import QUrl, QObject, QRectF, QMetaObject
     from PySide6.QtGui import QGuiApplication
-    from PySide6.QtQml import QQmlApplicationEngine
+    from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent
     from PySide6.QtQuick import QQuickWindow, QQuickItem
     from PySide6.QtTest import QTest
     HAS_QT = True
@@ -17,6 +17,167 @@ except ImportError:
 
 @unittest.skipUnless(HAS_QT, 'PySide6 is required for the optional QML smoke test')
 class WidgetTests(unittest.TestCase):
+    def test_appearance_settings_show_auto_preview_and_literal_custom_field(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('i18n', engine.evaluate(
+            '(function(s,a){return s.replace("%1",a === undefined ? "" : a);})'))
+        path = Path(__file__).resolve().parents[1] / 'contents/ui/configAppearance.qml'
+        component = QQmlComponent(engine, QUrl.fromLocalFile(str(path)))
+        self.assertFalse(component.isError(), [e.toString() for e in component.errors()])
+        form = component.createWithInitialProperties(dict(
+            cfg_provider='codex', cfg_theme='material3', cfg_titleMode='auto', cfg_titleText='codex.sh',
+            cfg_lowQuotaThreshold=20, cfg_criticalQuotaThreshold=10, cfg_lowQuotaWarning=True, cfg_fullQuotaIndicator=True,
+            cfg_dimStaleQuotas=True, cfg_showTitleBar=True))
+        self.assertIsNotNone(form, [e.toString() for e in component.errors()])
+        preview = form.findChild(QObject, 'titlePreview')
+        field = form.findChild(QQuickItem, 'customTitleField')
+        self.assertEqual(preview.property('text'), 'Codex')
+        self.assertFalse(field.isVisible())
+        form.setProperty('cfg_titleMode', 'custom')
+        self.assertTrue(field.isVisible())
+        self.assertEqual(field.property('text'), 'codex.sh')
+        self.assertEqual(preview.property('text'), 'codex.sh')
+        form.setProperty('cfg_theme', 'retro_pixel')
+        self.assertEqual(preview.property('text'), 'codex.sh')
+        form.setProperty('cfg_lowQuotaThreshold', 10)
+        self.assertEqual(form.property('cfg_lowQuotaThreshold'), 10)
+        form.setProperty('cfg_criticalQuotaThreshold', 5)
+        self.assertEqual(form.property('cfg_criticalQuotaThreshold'), 5)
+        form.deleteLater()
+        engine.deleteLater()
+        app.processEvents()
+
+    def test_title_modes_preserve_literal_custom_titles_across_themes(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        engine = QQmlApplicationEngine()
+        ui = (Path(__file__).resolve().parents[1] / 'contents/ui').as_uri()
+        engine.loadData(('''import QtQuick
+import "UI_PATH"
+Item {
+    ProviderTitle { id: title; objectName: "title"; rounded: true; customText: "antigravity.sh" }
+    PixelWindow { objectName: "card"; width: 256; height: 288; titleText: title.text }
+}'''.replace('UI_PATH', ui)).encode(), QUrl('file:///tmp/widget-title-smoke.qml'))
+        self.assertTrue(engine.rootObjects())
+        root = engine.rootObjects()[0]
+        title = root.findChild(QObject, 'title')
+        label = root.findChild(QObject, 'windowTitle')
+        self.assertEqual(label.property('text'), 'Antigravity')
+        title.setProperty('provider', 'codex')
+        self.assertEqual(label.property('text'), 'Codex')
+        title.setProperty('rounded', False)
+        self.assertEqual(label.property('text'), 'codex.sh')
+        title.setProperty('rounded', True)
+        title.setProperty('mode', 'custom')
+        for literal in ('codex.sh', 'antigravity.sh', 'antigravity.exe', 'мой агент', ''):
+            title.setProperty('customText', literal)
+            self.assertEqual(label.property('text'), literal)
+            title.setProperty('rounded', False)
+            self.assertEqual(label.property('text'), literal)
+            title.setProperty('rounded', True)
+        title.setProperty('mode', 'legacy')
+        title.setProperty('customText', 'Старый пользовательский заголовок')
+        self.assertFalse(title.property('automatic'))
+        self.assertEqual(label.property('text'), 'Старый пользовательский заголовок')
+        title.setProperty('mode', 'auto')
+        self.assertEqual(label.property('text'), 'Codex')
+        engine.deleteLater()
+        app.processEvents()
+
+    def test_quota_badges_are_configurable_and_do_not_occupy_quota_labels(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        engine = QQmlApplicationEngine()
+        ui = (Path(__file__).resolve().parents[1] / 'contents/ui').as_uri()
+        engine.loadData(('''import QtQuick
+import QtQuick.Window
+import "UI_PATH"
+Window {
+    visible: true; width: 300; height: 320
+    PixelTheme { id: badgeTheme; objectName: "badgeTheme" }
+    QuotaFreshness { id: freshness; objectName: "freshness"; now: 1000;
+        bar1Updated: 950; bar2Updated: 950; bar1Percent: 40; bar2Percent: 60 }
+    PixelWindow { objectName: "card"; width: 256; height: 288;
+        theme: badgeTheme;
+        titleText: "Очень длинный пользовательский заголовок.sh";
+        quotaState: freshness.indicatorState }
+}'''.replace('UI_PATH', ui)).encode(), QUrl('file:///tmp/widget-badges-smoke.qml'))
+        self.assertTrue(engine.rootObjects())
+        window = engine.rootObjects()[0]
+        state = window.findChild(QObject, 'freshness')
+        card = window.findChild(QQuickItem, 'card')
+        self.assertEqual(state.property('indicatorState'), 'hidden')
+        state.setProperty('bar1Percent', 20)
+        self.assertEqual(state.property('indicatorState'), 'low')
+        state.setProperty('bar1Exact', 20.1)
+        self.assertEqual(state.property('indicatorState'), 'hidden')
+        state.setProperty('lowThreshold', 25)
+        self.assertEqual(state.property('indicatorState'), 'low')
+        state.setProperty('lowWarning', False)
+        self.assertEqual(state.property('indicatorState'), 'hidden')
+        state.setProperty('lowWarning', True)
+        state.setProperty('bar1Exact', 14)
+        self.assertEqual(state.property('indicatorState'), 'low')
+        state.setProperty('bar1Exact', 10)
+        self.assertEqual(state.property('indicatorState'), 'low')
+        state.setProperty('bar1Exact', 9.9)
+        self.assertEqual(state.property('indicatorState'), 'critical')
+        state.setProperty('criticalThreshold', 5)
+        self.assertEqual(state.property('indicatorState'), 'low')
+        state.setProperty('bar1Exact', 0)
+        self.assertEqual(state.property('indicatorState'), 'exhausted')
+        theme = window.findChild(QObject, 'badgeTheme')
+        header = card.findChild(QQuickItem, 'headerQuotaIndicator')
+        state.setProperty('criticalThreshold', 10)
+        for theme_id in ('retro_pixel', 'material3', 'win95', 'cyberpunk', 'gruvbox', 'catppuccin', 'tokyo_night'):
+            theme.setProperty('activeThemeId', theme_id)
+            state.setProperty('bar1Exact', 14)
+            self.assertEqual(header.property('warningColor'), theme.property('textTitle'))
+            state.setProperty('bar1Exact', 9.9)
+            self.assertEqual(header.property('warningColor').name(), '#f0504c')
+        state.setProperty('bar1Exact', 0)
+        for position, name in (('header', 'headerQuotaIndicator'), ('status', 'statusQuotaIndicator')):
+            card.setProperty('quotaIndicatorPosition', position)
+            for width, height in ((256, 288), (160, 160)):
+                card.setWidth(width)
+                card.setHeight(height)
+                QTest.qWait(20)
+                item = card.findChild(QQuickItem, name)
+                self.assertTrue(item.isVisible())
+                rect = item.mapRectToItem(card, QRectF(0, 0, item.width(), item.height()))
+                self.assertGreaterEqual(rect.left(), 0)
+                self.assertLessEqual(rect.right(), width)
+                self.assertLessEqual(rect.bottom(), height)
+        card.setProperty('quotaIndicatorPosition', 'header')
+        card.setProperty('showTitleBar', False)
+        QTest.qWait(20)
+        self.assertTrue(card.findChild(QQuickItem, 'statusQuotaIndicator').isVisible())
+        card.setProperty('quotaIndicatorPosition', 'hidden')
+        self.assertFalse(card.findChild(QQuickItem, 'statusQuotaIndicator').isVisible())
+        state.setProperty('bar1Exact', 100)
+        state.setProperty('bar1Percent', 100)
+        state.setProperty('bar2Percent', 100)
+        self.assertEqual(state.property('indicatorState'), 'full')
+        state.setProperty('showFull', False)
+        self.assertEqual(state.property('indicatorState'), 'hidden')
+        state.setProperty('showFull', True)
+        state.setProperty('bar1Exact', 99.6)
+        self.assertEqual(state.property('indicatorState'), 'hidden')
+        state.setProperty('bar1Exact', 100)
+        state.setProperty('bar2Percent', -1)
+        self.assertEqual(state.property('indicatorState'), 'hidden')
+        state.setProperty('bar2Percent', 100)
+        state.setProperty('bar1Updated', 100)
+        self.assertEqual(state.property('indicatorState'), 'hidden')
+        self.assertTrue(state.property('bar1Dim'))
+        state.setProperty('dimStale', False)
+        self.assertFalse(state.property('bar1Dim'))
+        state.setProperty('bar1Updated', 950)
+        state.setProperty('error', 'offline')
+        self.assertEqual(state.property('indicatorState'), 'hidden')
+        window.close()
+        engine.deleteLater()
+        app.processEvents()
+
     def test_manual_refresh_coalesces_and_ignores_results_after_provider_switch(self):
         import json
         app = QGuiApplication.instance() or QGuiApplication([])
@@ -95,7 +256,7 @@ Window {
     QuotaFreshness { id: freshness; objectName: "freshness";
         now: 1000; bar1Updated: 950; bar2Updated: 950; bar1Percent: 40; bar2Percent: 20 }
     PixelWindow { objectName: "card"; width: 256; height: 288;
-        theme: testTheme; quotaState: freshness.state; quotaDescription: freshness.description;
+        theme: testTheme; quotaState: freshness.indicatorState; quotaDescription: freshness.description;
         bar1Percent: 40; bar2Percent: 20;
         bar1Dim: freshness.bar1Dim; bar2Dim: freshness.bar2Dim }
 }'''.replace('UI_PATH', ui)).encode(), QUrl('file:///tmp/widget-freshness-smoke.qml'))
@@ -121,11 +282,12 @@ Window {
                 card.setWidth(width)
                 card.setHeight(height)
                 QTest.qWait(10)
-                indicator = card.findChild(QQuickItem, 'quotaIndicator')
-                rect = indicator.mapRectToItem(card, QRectF(0, 0, indicator.width(), indicator.height()))
-                self.assertGreaterEqual(rect.left(), 0)
-                self.assertLessEqual(rect.right(), width)
-                self.assertLessEqual(rect.bottom(), height)
+                indicator = card.findChild(QQuickItem, 'headerQuotaIndicator')
+                if indicator.isVisible():
+                    rect = indicator.mapRectToItem(card, QRectF(0, 0, indicator.width(), indicator.height()))
+                    self.assertGreaterEqual(rect.left(), 0)
+                    self.assertLessEqual(rect.right(), width)
+                    self.assertLessEqual(rect.bottom(), height)
                 bar = card.findChild(QQuickItem, 'quotaBar2')
                 self.assertAlmostEqual(bar.findChild(QQuickItem, 'quotaFill').opacity(), .45)
         self.assertEqual(card.property('bar1Percent'), 40)

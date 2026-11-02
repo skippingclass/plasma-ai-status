@@ -10,6 +10,22 @@ import org.kde.kirigami as Kirigami
 KCM.SimpleKCM {
     id: root
 
+    property string cfg_titleMode: "legacy"
+    property string cfg_provider: "antigravity"
+    property string cfg_quotaIndicatorPosition: "header"
+    property alias cfg_lowQuotaWarning: lowWarningCheck.checked
+    property alias cfg_lowQuotaThreshold: lowThresholdSpin.value
+    property alias cfg_criticalQuotaThreshold: criticalThresholdSpin.value
+    property alias cfg_fullQuotaIndicator: fullIndicatorCheck.checked
+    property alias cfg_dimStaleQuotas: dimStaleCheck.checked
+    property PixelTheme previewTheme: PixelTheme { activeThemeId: root.cfg_theme }
+    property ProviderTitle previewTitle: ProviderTitle {
+        objectName: "titlePreview"
+        provider: root.cfg_provider
+        rounded: root.previewTheme.isRounded
+        mode: root.cfg_titleMode
+        customText: root.cfg_titleText
+    }
     property alias cfg_titleText: titleField.text
     property string cfg_colorScheme: colorSchemeCombo.currentValue
     property string cfg_theme: themeCombo.currentValue
@@ -99,12 +115,86 @@ KCM.SimpleKCM {
             text: i18n("Show window title bar and icon")
         }
 
+        QQC2.CheckBox {
+            objectName: "automaticTitleCheck"
+            Kirigami.FormData.label: i18n("Automatic Title:")
+            text: i18n("Match the service and theme")
+            checked: root.previewTitle.automatic
+            enabled: showTitleBarCheck.checked
+            onClicked: root.cfg_titleMode = checked ? "auto" : "custom"
+        }
+        QQC2.Label {
+            visible: root.previewTitle.automatic
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            text: i18n("Current title: %1", root.previewTitle.text)
+        }
+
         QQC2.TextField {
             id: titleField
+            objectName: "customTitleField"
             Kirigami.FormData.label: i18n("Window Title:")
-            placeholderText: i18n("Automatic (selected service)")
+            placeholderText: i18n("Custom title (shown exactly as entered)")
+            visible: !root.previewTitle.automatic
             enabled: showTitleBarCheck.checked
             Layout.fillWidth: true
+        }
+
+        Kirigami.Separator {
+            Kirigami.FormData.isSection: true
+            Kirigami.FormData.label: i18n("Quota Indicators")
+        }
+        QQC2.ComboBox {
+            Kirigami.FormData.label: i18n("Position:")
+            textRole: "text"
+            valueRole: "value"
+            model: [
+                {text: i18n("Title bar (status when title bar is hidden)"), value: "header"},
+                {text: i18n("Next to activity status"), value: "status"},
+                {text: i18n("Hidden"), value: "hidden"}
+            ]
+            currentIndex: root.cfg_quotaIndicatorPosition === "status" ? 1 : root.cfg_quotaIndicatorPosition === "hidden" ? 2 : 0
+            onActivated: root.cfg_quotaIndicatorPosition = currentValue
+        }
+        QQC2.CheckBox {
+            id: lowWarningCheck
+            Kirigami.FormData.label: i18n("Low Quota:")
+            text: i18n("Show ! when either limit is low")
+            enabled: root.cfg_quotaIndicatorPosition !== "hidden"
+        }
+        QQC2.SpinBox {
+            id: lowThresholdSpin
+            Kirigami.FormData.label: i18n("Warning Threshold:")
+            from: 0
+            to: 100
+            enabled: lowWarningCheck.checked && root.cfg_quotaIndicatorPosition !== "hidden"
+            textFromValue: value => value + "%"
+            valueFromText: text => parseInt(text) || 0
+        }
+        QQC2.SpinBox {
+            id: criticalThresholdSpin
+            Kirigami.FormData.label: i18n("Red Below:")
+            from: 0
+            to: 100
+            enabled: lowWarningCheck.checked && root.cfg_quotaIndicatorPosition !== "hidden"
+            textFromValue: value => value + "%"
+            valueFromText: text => parseInt(text) || 0
+        }
+        QQC2.CheckBox {
+            id: fullIndicatorCheck
+            Kirigami.FormData.label: i18n("Full Quota:")
+            text: i18n("Show a dot only when both limits are 100%")
+            enabled: root.cfg_quotaIndicatorPosition !== "hidden"
+        }
+        QQC2.CheckBox {
+            id: dimStaleCheck
+            Kirigami.FormData.label: i18n("Stale Data:")
+            text: i18n("Dim saved quotas when outdated or unavailable")
+        }
+        QQC2.Label {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            text: i18n("Normal quotas have no indicator. Freshness and errors remain in the tooltip. Indicators use current data only; panel widgets show them beside the logo.")
         }
 
         Kirigami.Separator {

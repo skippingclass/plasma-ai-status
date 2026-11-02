@@ -13,7 +13,7 @@
         "Id": "org.kde.plasma.antigravity",
         "License": "MIT",
         "Name": "Plasma AI Status",
-        "Version": "1.5.0",
+        "Version": "1.6.0",
         "Website": "https://github.com/skippingclass/plasma-ai-status"
     },
     "X-Plasma-API": "declarativeapplet",

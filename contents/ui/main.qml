@@ -29,12 +29,14 @@ PlasmoidItem {
         id: monitor
     }
 
-    readonly property string currentTitle: {
-        const title = Plasmoid.configuration.titleText;
-        if (!title || ["antigravity.sh", "antigravity.exe", "codex.sh"].indexOf(title) !== -1)
-            return root.provider === "codex" ? "codex.sh" : "antigravity.sh";
-        return title;
+    ProviderTitle {
+        id: resolvedTitle
+        provider: root.provider
+        rounded: visualTheme.isRounded
+        mode: Plasmoid.configuration.titleMode || "legacy"
+        customText: Plasmoid.configuration.titleText
     }
+    readonly property string currentTitle: resolvedTitle.text
     readonly property string currentStatus: monitor.currentStatus
     readonly property string currentBar1Label: monitor.bar1Label
     readonly property int currentBar1Val: monitor.bar1Val
@@ -74,7 +76,7 @@ PlasmoidItem {
         statusText: root.currentStatus
         bar1Val: root.currentBar1Val
         colorScheme: root.currentColorScheme
-        quotaState: monitor.freshness.state
+        quotaState: Plasmoid.configuration.quotaIndicatorPosition === "hidden" ? "hidden" : monitor.freshness.indicatorState
         quotaDescription: monitor.freshness.description
     }
 
@@ -99,8 +101,9 @@ PlasmoidItem {
         showResetTimes: Plasmoid.configuration.showResetTimes !== undefined ? Plasmoid.configuration.showResetTimes : false
         barStyle: Plasmoid.configuration.barStyle ? Plasmoid.configuration.barStyle : "auto"
         mascotSize: Plasmoid.configuration.mascotSize ? Plasmoid.configuration.mascotSize : "auto"
-        quotaState: monitor.freshness.state
+        quotaState: monitor.freshness.indicatorState
         quotaDescription: monitor.freshness.description
+        quotaIndicatorPosition: Plasmoid.configuration.quotaIndicatorPosition || "header"
         bar1Dim: monitor.freshness.bar1Dim
         bar2Dim: monitor.freshness.bar2Dim
     }

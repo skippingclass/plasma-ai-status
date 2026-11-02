@@ -10,7 +10,8 @@ Rectangle {
     property string provider: "antigravity"
     property PixelTheme theme: PixelTheme {}
 
-    property string titleText: "antigravity.sh"
+    property string titleText: ""
+    property string quotaIndicatorPosition: "header"
     property string statusText: "отдыхает"
     property string bar1Label: "5 часов"
     property int bar1Percent: 72
@@ -134,7 +135,11 @@ Rectangle {
                 }
 
                 Text {
-                    text: root.theme.isRounded && (root.titleText === "antigravity.sh" || root.titleText === "codex.sh") ? (root.provider === "codex" ? "Codex" : "Antigravity") : root.titleText
+                    objectName: "windowTitle"
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    text: root.titleText
+                    textFormat: Text.PlainText
                     font.family: root.theme.pixelFontFamily
                     font.pixelSize: root.titleFontSize
                     font.weight: root.theme.isRounded ? Font.DemiBold : Font.Normal
@@ -144,8 +149,13 @@ Rectangle {
                     antialiasing: !root.theme.isPixelFont
                 }
 
-                Item {
-                    Layout.fillWidth: true
+                QuotaIndicator {
+                    objectName: "headerQuotaIndicator"
+                    inTitleBar: true
+                    Layout.alignment: Qt.AlignVCenter
+                    theme: root.theme
+                    quotaState: root.quotaIndicatorPosition === "header" ? root.quotaState : "hidden"
+                    description: root.quotaDescription
                 }
             }
         }
@@ -190,16 +200,27 @@ Rectangle {
                         }
                     }
 
-                    Text {
+                    RowLayout {
                         Layout.alignment: Qt.AlignHCenter
-                        text: root.statusText
-                        font.family: root.theme.pixelFontFamily
-                        font.pixelSize: root.statusFontSize
-                        font.weight: root.theme.isRounded ? Font.DemiBold : Font.Normal
-                        font.letterSpacing: root.theme.isRounded ? 0.3 : 0
-                        color: root.statusText === "спит" ? root.theme.textMuted : root.theme.getStatusColor(root.statusText)
-                        renderType: root.theme.isPixelFont ? Text.NativeRendering : Text.QtRendering
-                        antialiasing: !root.theme.isPixelFont
+                        spacing: 8
+                        Text {
+                            text: root.statusText
+                            font.family: root.theme.pixelFontFamily
+                            font.pixelSize: root.statusFontSize
+                            font.weight: root.theme.isRounded ? Font.DemiBold : Font.Normal
+                            font.letterSpacing: root.theme.isRounded ? 0.3 : 0
+                            color: root.statusText === "спит" ? root.theme.textMuted : root.theme.getStatusColor(root.statusText)
+                            renderType: root.theme.isPixelFont ? Text.NativeRendering : Text.QtRendering
+                            antialiasing: !root.theme.isPixelFont
+                        }
+                        QuotaIndicator {
+                            objectName: "statusQuotaIndicator"
+                            Layout.alignment: Qt.AlignVCenter
+                            theme: root.theme
+                            quotaState: root.quotaIndicatorPosition === "status" ||
+                                        (!root.showTitleBar && root.quotaIndicatorPosition === "header") ? root.quotaState : "hidden"
+                            description: root.quotaDescription
+                        }
                     }
                 }
 
@@ -232,8 +253,6 @@ Rectangle {
                         fontSize: root.barFontSize
                         barHeight: root.barHeight
                         dimmed: root.bar1Dim
-                        quotaState: root.quotaState
-                        quotaDescription: root.quotaDescription
                     }
 
                     PixelProgressBar {

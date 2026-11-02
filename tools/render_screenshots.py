@@ -36,11 +36,13 @@ Window {
     color: "#111116"
     property string selectedTheme: "retro_pixel"
     PixelTheme { id: demoTheme; activeThemeId: scene.selectedTheme }
+    ProviderTitle { id: agyTitle; provider: "antigravity"; rounded: demoTheme.isRounded; mode: "auto" }
+    ProviderTitle { id: codexTitle; provider: "codex"; rounded: demoTheme.isRounded; mode: "auto" }
     FullRepresentation {
         x: 16; y: 16; width: 256; height: 288
         provider: "antigravity"
         theme: demoTheme
-        titleText: "antigravity.sh"
+        titleText: agyTitle.text
         statusText: "думает"
         bar1Label: "5 часов"; bar1Percent: 72; bar1Exact: 72.4; bar1Reset: "2ч 18м"
         bar2Label: "неделя"; bar2Percent: 56; bar2Exact: 55.9; bar2Reset: "1д 15ч"
@@ -51,7 +53,7 @@ Window {
         x: 288; y: 16; width: 256; height: 288
         provider: "codex"
         theme: demoTheme
-        titleText: "codex.sh"
+        titleText: codexTitle.text
         statusText: "работает"
         bar1Label: "5 часов"; bar1Percent: 84; bar1Exact: 84.0; bar1Reset: "4ч 12м"
         bar2Label: "неделя"; bar2Percent: 63; bar2Exact: 63.0; bar2Reset: "5д 20ч"
