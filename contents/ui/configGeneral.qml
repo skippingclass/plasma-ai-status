@@ -22,7 +22,7 @@ KCM.SimpleKCM {
             textRole: "text"
             valueRole: "value"
             model: [
-                { text: "Antigravity (agy)", value: "antigravity" },
+                { text: "Antigravity (GUI + CLI)", value: "antigravity" },
                 { text: "OpenAI Codex", value: "codex" }
             ]
             currentIndex: root.cfg_provider === "codex" ? 1 : 0
@@ -37,7 +37,7 @@ KCM.SimpleKCM {
 
         Kirigami.Separator {
             Kirigami.FormData.isSection: true
-            Kirigami.FormData.label: i18n("CLI Monitoring")
+            Kirigami.FormData.label: i18n("Activity Monitoring")
         }
 
         QQC2.CheckBox {

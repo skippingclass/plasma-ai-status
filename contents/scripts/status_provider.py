@@ -13,6 +13,8 @@ import time
 import fcntl
 import sqlite3
 import subprocess
+import ssl
+import urllib.request
 from datetime import datetime, timezone
 
 CACHE_TTL = 60  # seconds
@@ -127,6 +129,114 @@ def get_active_agy_pids(proc_root="/proc"):
     return pids
 
 
+def command_option(args, name):
+    for index, arg in enumerate(args):
+        if arg == name and index + 1 < len(args):
+            return args[index + 1]
+        if arg.startswith(name + "="):
+            return arg[len(name) + 1:]
+    return None
+
+
+def is_antigravity_server(args):
+    if not args:
+        return False
+    executable = args[0].lower()
+    name = os.path.basename(executable)
+    return (name == "language-server" or name.startswith("language_server")) and (
+        command_option(args, "--app_data_dir") in ("antigravity", "antigravity-ide")
+        or command_option(args, "--override_ide_name") == "antigravity"
+        or "/extensions/antigravity/" in executable)
+
+
+def is_antigravity_gui(args):
+    return bool(args) and (is_antigravity_server(args) or (
+        os.path.basename(args[0]).lower() in (
+            "antigravity", "antigravity.appimage", "antigravity-ide")
+        and command_option(args, "--type") is None
+        and not any(arg in ("--help", "-h", "--version", "-v") for arg in args[1:])))
+
+
+def antigravity_gui_pids(proc_root="/proc"):
+    pids = []
+    for path in glob.glob(f"{proc_root}/[0-9]*/cmdline"):
+        try:
+            if os.stat(path).st_uid != os.getuid():
+                continue
+            pid = int(path.split("/")[-2])
+            if is_antigravity_gui(process_args(pid, proc_root)):
+                pids.append(pid)
+        except (OSError, ValueError):
+            continue
+    return pids
+
+
+def listening_ports(pid, proc_root="/proc"):
+    """Only ports owned by this process, never arbitrary localhost services."""
+    sockets = set()
+    for path in glob.glob(f"{proc_root}/{pid}/fd/*"):
+        try:
+            target = os.readlink(path)
+            if target.startswith("socket:["):
+                sockets.add(target[8:-1])
+        except OSError:
+            continue
+    ports = set()
+    for protocol in ("tcp", "tcp6"):
+        try:
+            with open(f"{proc_root}/{pid}/net/{protocol}") as stream:
+                for line in stream:
+                    fields = line.split()
+                    if len(fields) > 9 and fields[3] == "0A" and fields[9] in sockets:
+                        address, port = fields[1].split(":")
+                        # Servers may bind to all interfaces; requests always use loopback.
+                        if address in ("0100007F", "00000000", "0" * 32,
+                                       "00000000000000000000000001000000"):
+                            ports.add(int(port, 16))
+        except (OSError, ValueError):
+            continue
+    return sorted(ports)
+
+
+def fetch_antigravity_gui_quota():
+    """Read the running GUI's quota summary; never read its cloud credentials."""
+    deadline = time.monotonic() + 8
+    # No proxies or redirects: the ephemeral CSRF token must stay on loopback.
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), NoRedirect(),
+        urllib.request.HTTPSHandler(context=ssl._create_unverified_context()))
+    for pid in antigravity_gui_pids():
+        args = process_args(pid)
+        if not is_antigravity_server(args):
+            continue
+        token = command_option(args, "--csrf_token")
+        if not token:
+            continue
+        for port in listening_ports(pid)[:8]:
+            for scheme in ("https", "http"):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                request = urllib.request.Request(
+                    f"{scheme}://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary",
+                    data=b"{}", headers={"Content-Type": "application/json",
+                        "Connect-Protocol-Version": "1", "X-Codeium-Csrf-Token": token})
+                try:
+                    with opener.open(request, timeout=min(0.75, remaining)) as response:
+                        payload = response.read(1048577)
+                    if len(payload) > 1048576:
+                        continue
+                    quota = parse_agy_quota(json.loads(payload))
+                    if quota:
+                        return quota
+                except (OSError, ValueError, TypeError, AttributeError):
+                    continue
+    return None
+
+
 def decode_varint(buf, pos):
     val = 0
     shift = 0
@@ -238,11 +348,11 @@ def get_latest_cancel_ts(log_file, cid=None):
     return 0
 
 
-def inspect_pid_fds(pid):
-    """Find open conversation SQLite DBs and active log file for a specific agy PID."""
+def inspect_pid_fds(pid, proc_root="/proc"):
+    """Find CLI/GUI conversations owned by a live process, not stale history."""
     dbs = set()
     log_file = None
-    fd_dir = f"/proc/{pid}/fd"
+    fd_dir = f"{proc_root}/{pid}/fd"
     try:
         for fd_name in os.listdir(fd_dir):
             try:
@@ -251,8 +361,10 @@ def inspect_pid_fds(pid):
                     dbs.add(target)
                 elif "/presence/" in target and target.endswith(".lock"):
                     cid = os.path.basename(target)[:-5]
-                    cand = os.path.expanduser(f"~/.gemini/antigravity-cli/conversations/{cid}.db")
-                    if os.path.exists(cand):
+                    # Presence belongs to its own profile (CLI and GUI can coexist).
+                    root = os.path.dirname(os.path.dirname(target))
+                    cand = os.path.join(root, "conversations", cid + ".db")
+                    if os.path.isfile(cand):
                         dbs.add(cand)
                 elif fd_name in ("1", "2") and target.endswith(".log") and os.path.exists(target):
                     log_file = target
@@ -260,6 +372,17 @@ def inspect_pid_fds(pid):
                 continue
     except Exception:
         pass
+    if not log_file and is_antigravity_server(process_args(pid, proc_root)):
+        config = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+        candidate = os.path.join(config, "Antigravity", "logs", "language_server.log")
+        try:
+            with open(candidate, errors="replace") as stream:
+                header = stream.read(4096)
+            # A shared path can contain another instance's log or a previous run.
+            if re.search(rf"Starting language server process with pid {pid}\b", header):
+                log_file = candidate
+        except OSError:
+            pass
     return list(dbs), log_file
 
 
@@ -417,6 +540,11 @@ def fetch_agy_quota():
     return None
 
 
+def fetch_antigravity_quota():
+    # Prefer the open app, including GUI-only installations / GUI-only login.
+    return fetch_antigravity_gui_quota() or fetch_agy_quota()
+
+
 def unknown_quota():
     return {"bar1_label": "5 часов", "bar2_label": "неделя",
             "bar1_percent": -1, "bar2_percent": -1,
@@ -438,18 +566,29 @@ def set_bucket(quota, index, remaining, reset_at=None):
 
 def parse_agy_quota(data):
     groups = data.get("command", {}).get("data", {}).get("groups", [])
-    group = next((g for g in groups if "gemini" in g.get("name", "").lower()), None)
+    if not groups:
+        groups = data.get("response", data).get("groups", [])
+    group = next((g for g in groups if
+                  (g.get("name") or g.get("displayName", "")).strip().lower()
+                  in ("gemini models", "gemini")), None)
     if not group:
         return None
     quota = unknown_quota()
     for bucket in group.get("buckets", []):
+        if bucket.get("enabled") is False:
+            continue
         index = None
-        if bucket.get("id") == "gemini-5h" or bucket.get("window") == "5h":
+        bucket_id = bucket.get("id") or bucket.get("bucketId")
+        if bucket_id == "gemini-5h" or bucket.get("window") == "5h":
             index = 1
-        elif bucket.get("id") == "gemini-weekly" or bucket.get("window") == "weekly":
+        elif bucket_id == "gemini-weekly" or bucket.get("window") == "weekly":
             index = 2
-        if index and bucket.get("remaining_fraction") is not None:
-            set_bucket(quota, index, float(bucket["remaining_fraction"]) * 100, bucket.get("reset_time"))
+        fraction = bucket.get("remaining_fraction", bucket.get("remainingFraction"))
+        if fraction is None:
+            fraction = (bucket.get("remaining") or {}).get("remainingFraction")
+        if index and fraction is not None:
+            set_bucket(quota, index, float(fraction) * 100,
+                       bucket.get("reset_time") or bucket.get("resetTime"))
     return quota if any(quota[f"bar{i}_percent"] >= 0 for i in (1, 2)) else None
 
 
@@ -601,20 +740,47 @@ def codex_session_status(events, now):
     return "работает" if pending_tools else status
 
 
+def is_quota_worker_child(pid, proc_root="/proc"):
+    """Exclude only our quota probe, not the desktop app's persistent server."""
+    for _ in range(32):
+        args = process_args(pid, proc_root)
+        if "--refresh-only" in args and any(
+                os.path.basename(arg) == "status_provider.py" for arg in args):
+            return True
+        try:
+            with open(f"{proc_root}/{pid}/stat") as stream:
+                parent = int(stream.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+        if parent <= 1 or parent == pid:
+            break
+        pid = parent
+    return False
+
+
+def codex_running(proc_root="/proc"):
+    for path in glob.glob(f"{proc_root}/[0-9]*/cmdline"):
+        try:
+            if os.stat(path).st_uid != os.getuid():
+                continue
+            pid = int(path.split("/")[-2])
+            args = process_args(pid, proc_root)
+            if not args or os.path.basename(args[0]).lower() not in ("codex", "codex-desktop"):
+                continue
+            if command_option(args, "--type") is not None or any(
+                    arg in ("login", "logout", "--help", "-h", "--version", "-V") for arg in args[1:]):
+                continue
+            if not is_quota_worker_child(pid, proc_root):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 def check_codex_status():
     now = time.time()
     best = "спит"
-    # The quota worker's own short-lived app-server must not count as activity.
-    running = False
-    for path in glob.glob("/proc/[0-9]*/cmdline"):
-        try:
-            with open(path, "rb") as stream:
-                args = stream.read().split(b"\0")
-            if args and os.path.basename(os.fsdecode(args[0])) == "codex" and b"app-server" not in args and b"login" not in args:
-                running = True
-                break
-        except OSError:
-            continue
+    running = codex_running()
     files = glob.glob(os.path.join(codex_home(), "sessions", "*", "*", "*", "*.jsonl"))
     recent = []
     for path in files:
@@ -702,9 +868,11 @@ def refresh_quota(provider):
         cached["attempted_at"] = now
         write_cache(cache_file, cached)
         try:
-            quota = fetch_codex_quota() if provider == "codex" else fetch_agy_quota()
+            quota = fetch_codex_quota() if provider == "codex" else fetch_antigravity_quota()
             if not quota:
-                raise RuntimeError("Лимиты недоступны: проверьте вход в CLI и тип подписки")
+                raise RuntimeError("Лимиты недоступны: откройте Antigravity или проверьте вход в CLI и тип подписки"
+                                   if provider == "antigravity" else
+                                   "Лимиты недоступны: проверьте вход в Codex и тип подписки")
             updated_at = time.time()
             merged = dict(cached)
             # A partial response must not erase the other window's last known quota.
@@ -760,7 +928,7 @@ def main():
     if args.provider == "codex":
         status = check_codex_status()
     else:
-        status = check_agy_status(get_active_agy_pids())
+        status = check_agy_status(get_active_agy_pids() + antigravity_gui_pids())
     result = get_usage(args.provider)
     result.update(status=status, provider=args.provider)
     print(json.dumps(result, ensure_ascii=False))
